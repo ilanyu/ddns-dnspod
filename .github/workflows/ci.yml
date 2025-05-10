@@ -37,6 +37,17 @@ jobs:
         #    goarch: amd64
 
     steps:
+      - name: Check Docker Hub Username
+        run: |
+          if [ -z "${{ secrets.DOCKERHUB_USERNAME }}" ]; then
+            echo "Error: DOCKERHUB_USERNAME secret is not set."
+            exit 1
+          elif [[ "${{ secrets.DOCKERHUB_USERNAME }}" == "***" ]]; then
+            echo "Error: DOCKERHUB_USERNAME secret appears to be a placeholder '***'. Please set it correctly."
+            exit 1
+          fi
+          echo "DOCKERHUB_USERNAME check passed."
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -68,7 +79,7 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }} # This must be a valid username
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Extract metadata (tags, labels) for Docker
@@ -109,6 +120,17 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')
     steps:
+      - name: Check Docker Hub Username
+        run: |
+          if [ -z "${{ secrets.DOCKERHUB_USERNAME }}" ]; then
+            echo "Error: DOCKERHUB_USERNAME secret is not set."
+            exit 1
+          elif [[ "${{ secrets.DOCKERHUB_USERNAME }}" == "***" ]]; then
+            echo "Error: DOCKERHUB_USERNAME secret appears to be a placeholder '***'. Please set it correctly."
+            exit 1
+          fi
+          echo "DOCKERHUB_USERNAME check passed for manifest job."
+
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
@@ -127,13 +149,46 @@ jobs:
 
       - name: Create and push manifest list
         run: |
+          set -e # Exit immediately if a command exits with a non-zero status.
           TAGS_TO_MANIFEST=""
-          for tag_base in ${{ steps.meta_manifest.outputs.tags }}; do
+          echo "${{ steps.meta_manifest.outputs.tags }}" | while IFS= read -r tag_base; do
+            if [ -z "$tag_base" ]; then
+              echo "Skipping empty base tag."
+              continue
+            fi
             echo "Processing base tag: $tag_base"
-            docker manifest create --amend $tag_base \
-              $tag_base-linux-amd64 \
-              $tag_base-linux-arm64
-            docker manifest push $tag_base
+            
+            # Define platform-specific tags based on the main tag_base
+            # Ensure these match the tags pushed by the build-binaries-and-docker-image job
+            # The build job pushes tags like: repo:version-os-arch and repo:latest-os-arch
+            # The manifest should use the same base tag (e.g., repo:version or repo:latest)
+            # and append the platform specific image names.
+
+            # Construct platform image names. This assumes your build job tagged them as $tag_base-linux-amd64 etc.
+            # The build job currently tags as:
+            # ${{ secrets.DOCKERHUB_USERNAME }}/ddns-dnspod:${{ steps.meta.outputs.version }}-${{ matrix.goos }}-${{ matrix.goarch }}
+            # ${{ secrets.DOCKERHUB_USERNAME }}/ddns-dnspod:latest-${{ matrix.goos }}-${{ matrix.goarch }}
+            # So, if tag_base is "myuser/ddns-dnspod:v1.0.0", the platform images are
+            # "myuser/ddns-dnspod:v1.0.0-linux-amd64", etc.
+
+            PLATFORM_IMG_AMD64="${tag_base}-linux-amd64"
+            PLATFORM_IMG_ARM64="${tag_base}-linux-arm64"
+
+            echo "Creating manifest for $tag_base using:"
+            echo "  $PLATFORM_IMG_AMD64"
+            echo "  $PLATFORM_IMG_ARM64"
+
+            docker manifest create --amend "$tag_base" \
+              "$PLATFORM_IMG_AMD64" \
+              "$PLATFORM_IMG_ARM64"
+            # Add annotations if necessary, e.g., for ARM variants
+            # docker manifest annotate "$tag_base" "$PLATFORM_IMG_ARM_V7" --os linux --arch arm --variant v7
+            
+            docker manifest push "$tag_base"
             TAGS_TO_MANIFEST="$TAGS_TO_MANIFEST $tag_base"
           done
-          echo "Manifests created and pushed for tags:$TAGS_TO_MANIFEST"
+          if [ -n "$TAGS_TO_MANIFEST" ]; then
+            echo "Manifests created and pushed for tags:$TAGS_TO_MANIFEST"
+          else
+            echo "No tags processed for manifest creation."
+          fi
