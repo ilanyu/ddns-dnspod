@@ -130,9 +130,11 @@ docker pull ilanyu/ddns-dnspod:latest
 **运行容器:**
 
 确保替换以下示例中的占位符为您自己的值。
+为了确保容器能够正确获取宿主机的 IPv6 地址（如果宿主机有的话），建议使用主机网络模式 (`--network host`)。
 
 ```bash
 docker run -d --name my-ddns-dnspod \
+  --network host \
   -e DNSPOD_SECRET_ID="YOUR_SECRET_ID" \
   -e DNSPOD_SECRET_KEY="YOUR_SECRET_KEY" \
   -e DNSPOD_DOMAIN="example.com" \
@@ -143,6 +145,11 @@ docker run -d --name my-ddns-dnspod \
   --restart always \
   ilanyu/ddns-dnspod:latest
 ```
+
+**注意关于 `--network host`:**
+*   使用主机网络模式时，容器将直接使用宿主机的网络接口，而不是 Docker 的虚拟网络。这可以简化网络配置，特别是对于需要访问宿主机网络服务的应用或需要准确获取宿主机 IP 地址（包括 IPv6）的应用。
+*   此模式下，容器内的端口将直接映射到宿主机上的相同端口，因此需要注意端口冲突。
+*   此模式仅在 Linux 主机上可用。
 
 **必需的环境变量 (在 Docker 中运行时):**
 
