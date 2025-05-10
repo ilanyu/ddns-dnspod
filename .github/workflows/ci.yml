@@ -37,9 +37,6 @@ jobs:
           - target_os: darwin
             target_arch: arm64
             asset_name_suffix: darwin-arm64
-    outputs:
-      asset_path_${{ matrix.target_os }}_${{ matrix.target_arch }}: ${{ steps.build.outputs.asset_path }}
-      asset_name_${{ matrix.target_os }}_${{ matrix.target_arch }}: ${{ steps.build.outputs.asset_name }}
 
     steps:
       - name: Checkout repository
@@ -192,12 +189,6 @@ jobs:
           context: . # Dockerfile needs access to 'dist' directory with pre-built binaries
           file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
-          # TARGETOS and TARGETARCH build-args are used by Dockerfile to pick the correct binary
-          # Since we are building a multi-platform image with buildx,
-          # buildx handles passing the correct platform context to each build.
-          # The Dockerfile needs to be able to select the binary based on TARGETPLATFORM or similar.
-          # Let's ensure Dockerfile uses TARGETOS and TARGETARCH as defined.
-          # The Dockerfile already expects dist/${TARGETOS}-${TARGETARCH}/ddns-dnspod
           push: true # Always push if this job runs
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
