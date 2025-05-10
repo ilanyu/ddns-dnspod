@@ -1,4 +1,4 @@
-name: Build and Push Docker Image
+name: Build, Release, and Push Docker Image
 
 on:
   push:
@@ -11,30 +11,118 @@ on:
       - main
 
 jobs:
-  build-binaries-and-docker-image: # Renamed job for clarity
+  build-binaries:
+    name: Build Binaries for ${{ matrix.target_os }}/${{ matrix.target_arch }}
+    runs-on: ubuntu-latest # Go cross-compilation is well-supported on Linux runners
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        include:
+          - target_os: linux
+            target_arch: amd64
+            asset_name_suffix: linux-amd64
+          - target_os: linux
+            target_arch: arm64
+            asset_name_suffix: linux-arm64
+          - target_os: windows
+            target_arch: amd64
+            asset_name_suffix: windows-amd64.exe
+          - target_os: windows
+            target_arch: "386" # Go uses "386" for x86
+            asset_name_suffix: windows-386.exe
+          - target_os: darwin
+            target_arch: amd64
+            asset_name_suffix: darwin-amd64
+          - target_os: darwin
+            target_arch: arm64
+            asset_name_suffix: darwin-arm64
+    outputs:
+      asset_path_${{ matrix.target_os }}_${{ matrix.target_arch }}: ${{ steps.build.outputs.asset_path }}
+      asset_name_${{ matrix.target_os }}_${{ matrix.target_arch }}: ${{ steps.build.outputs.asset_name }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Build Go application
+        id: build
+        env:
+          GOOS: ${{ matrix.target_os }}
+          GOARCH: ${{ matrix.target_arch }}
+          CGO_ENABLED: 0
+        run: |
+          BINARY_NAME="ddns-dnspod"
+          ASSET_NAME="${BINARY_NAME}-${{ matrix.asset_name_suffix }}"
+          OUTPUT_PATH="dist/${ASSET_NAME}"
+          echo "Building for $GOOS/$GOARCH..."
+          go build -ldflags="-s -w" -o "${OUTPUT_PATH}" .
+          echo "Built: ${OUTPUT_PATH}"
+          ls -l "${OUTPUT_PATH}"
+          echo "asset_path=${OUTPUT_PATH}" >> $GITHUB_OUTPUT
+          echo "asset_name=${ASSET_NAME}" >> $GITHUB_OUTPUT
+      
+      - name: Upload binary artifact (for other jobs)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ddns-dnspod-${{ matrix.target_os }}-${{ matrix.target_arch }}
+          path: dist/ddns-dnspod-${{ matrix.asset_name_suffix }}
+          retention-days: 1 # Keep artifacts for a short period
+
+  create-github-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Needed to create releases and upload assets
+    needs: build-binaries
+    if: startsWith(github.ref, 'refs/tags/v') # Only run for tags
+    steps:
+      - name: Checkout code (for release notes, etc., if needed)
+        uses: actions/checkout@v4
+
+      - name: Download all binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-all # Download all artifacts into this directory
+          # No specific name, download all artifacts produced by `build-binaries`
+
+      - name: List downloaded artifacts
+        run: ls -R dist-all
+
+      - name: Create Release and Upload Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          # tag_name: ${{ github.ref_name }} # Automatically uses the tag that triggered the workflow
+          # name: Release ${{ github.ref_name }}
+          # body: |
+          #   Automated release for ${{ github.ref_name }}
+          #   See CHANGELOG.md for details.
+          draft: false
+          prerelease: false # Set to true if these are pre-releases
+          files: |
+            dist-all/ddns-dnspod-linux-amd64/ddns-dnspod-linux-amd64
+            dist-all/ddns-dnspod-linux-arm64/ddns-dnspod-linux-arm64
+            dist-all/ddns-dnspod-windows-amd64/ddns-dnspod-windows-amd64.exe
+            dist-all/ddns-dnspod-windows-386/ddns-dnspod-windows-386.exe
+            dist-all/ddns-dnspod-darwin-amd64/ddns-dnspod-darwin-amd64
+            dist-all/ddns-dnspod-darwin-arm64/ddns-dnspod-darwin-arm64
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # This is automatically provided
+
+  build-and-push-docker-linux:
+    name: Build and Push Linux Docker Images
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
-
-    strategy:
-      matrix:
-        # Define target platforms for both Go build and Docker image
-        include:
-          - target: linux/amd64
-            goos: linux
-            goarch: amd64
-          - target: linux/arm64
-            goos: linux
-            goarch: arm64
-        # Add more platforms as needed:
-        #  - target: linux/arm/v7
-        #    goos: linux
-        #    goarch: arm
-        #    goarm: 7 # if GOARM is needed
-        #  - target: windows/amd64
-        #    goos: windows
-        #    goarch: amd64
+      packages: write # If pushing to GitHub Packages, or for Docker Hub login
+    needs: build-binaries # Ensure binaries are built first
+    # Run on tags and pushes to main for Docker images
+    if: (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main') && github.event_name != 'pull_request'
 
     steps:
       - name: Check Docker Hub Username
@@ -42,33 +130,40 @@ jobs:
           if [ -z "${{ secrets.DOCKERHUB_USERNAME }}" ]; then
             echo "Error: DOCKERHUB_USERNAME secret is not set."
             exit 1
-          elif [[ "${{ secrets.DOCKERHUB_USERNAME }}" == "***" ]]; then
-            echo "Error: DOCKERHUB_USERNAME secret appears to be a placeholder '***'. Please set it correctly."
-            exit 1
           fi
           echo "DOCKERHUB_USERNAME check passed."
 
-      - name: Checkout repository
+      - name: Checkout repository (needed for Dockerfile and context)
         uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - name: Download Linux binary artifacts
+        uses: actions/download-artifact@v4
         with:
-          go-version: '1.22' # Specify your Go version
+          path: dist # Download all artifacts into dist, then Dockerfile will pick
+          # We only need linux ones for Docker, but download-artifact downloads by artifact name pattern
+          # So we'll download all and Dockerfile context will have them.
+          # Or, be more specific if artifact names are unique enough.
+          # For simplicity, download all and let Docker context have them.
+          # The Dockerfile will COPY from dist/linux-amd64 and dist/linux-arm64
 
-      - name: Build Go application for ${{ matrix.target }}
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          # GOARM: ${{ matrix.goarm }} # Uncomment if building for specific ARM versions like armv7
-          CGO_ENABLED: 0
+      - name: List downloaded artifacts for Docker
         run: |
-          echo "Building for $GOOS/$GOARCH..."
-          go build -ldflags="-s -w" -o dist/$GOOS-$GOARCH/ddns-dnspod .
-          ls -l dist/$GOOS-$GOARCH/ # Verify binary exists
+          mkdir -p dist/linux-amd64 dist/linux-arm64 # Ensure target dirs for Dockerfile exist
+          if [ -f dist/ddns-dnspod-linux-amd64/ddns-dnspod-linux-amd64 ]; then
+            cp dist/ddns-dnspod-linux-amd64/ddns-dnspod-linux-amd64 dist/linux-amd64/ddns-dnspod
+          else
+            echo "Error: linux-amd64 binary not found after download."
+            exit 1
+          fi
+          if [ -f dist/ddns-dnspod-linux-arm64/ddns-dnspod-linux-arm64 ]; then
+            cp dist/ddns-dnspod-linux-arm64/ddns-dnspod-linux-arm64 dist/linux-arm64/ddns-dnspod
+          else
+            echo "Error: linux-arm64 binary not found after download."
+            exit 1
+          fi
+          ls -R dist
 
       - name: Set up QEMU
-        if: runner.os == 'Linux' # QEMU is typically for cross-compilation on Linux runners
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
@@ -76,119 +171,35 @@ jobs:
         id: buildx
 
       - name: Login to Docker Hub
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }} # This must be a valid username
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Extract metadata (tags, labels) for Docker
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ secrets.DOCKERHUB_USERNAME }}/ddns-dnspod # Replace with your Docker Hub username/repo
-          # Add platform suffix to tags to distinguish images if building one image per platform
-          # For a manifest list, you might not need platform-specific tags here if Docker Hub handles it.
-          # This example assumes we are building a manifest list.
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/ddns-dnspod
           tags: |
-            type=schedule
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix=,suffix=,event=branch
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}} # For tagged releases
+            type=raw,value=latest,enable={{is_default_branch}} # For main branch
+            type=sha,prefix=,suffix=,event=branch,enable={{is_default_branch}} # Git SHA for main branch
 
-      - name: Build and push Docker image for ${{ matrix.target }}
+      - name: Build and push multi-platform Docker image (Linux only)
         uses: docker/build-push-action@v5
         with:
-          context: . # The whole repo, including the 'dist' dir with compiled binaries
+          context: . # Dockerfile needs access to 'dist' directory with pre-built binaries
           file: ./Dockerfile
-          build-args: |
-            TARGETOS=${{ matrix.goos }}
-            TARGETARCH=${{ matrix.goarch }}
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: | # Create platform specific tags
-            ${{ secrets.DOCKERHUB_USERNAME }}/ddns-dnspod:${{ steps.meta.outputs.version }}-${{ matrix.goos }}-${{ matrix.goarch }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/ddns-dnspod:latest-${{ matrix.goos }}-${{ matrix.goarch }}
+          platforms: linux/amd64,linux/arm64
+          # TARGETOS and TARGETARCH build-args are used by Dockerfile to pick the correct binary
+          # Since we are building a multi-platform image with buildx,
+          # buildx handles passing the correct platform context to each build.
+          # The Dockerfile needs to be able to select the binary based on TARGETPLATFORM or similar.
+          # Let's ensure Dockerfile uses TARGETOS and TARGETARCH as defined.
+          # The Dockerfile already expects dist/${TARGETOS}-${TARGETARCH}/ddns-dnspod
+          push: true # Always push if this job runs
+          tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-  create-manifest:
-    needs: build-binaries-and-docker-image # Depends on the previous job (all matrix instances)
-    runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')
-    steps:
-      - name: Check Docker Hub Username
-        run: |
-          if [ -z "${{ secrets.DOCKERHUB_USERNAME }}" ]; then
-            echo "Error: DOCKERHUB_USERNAME secret is not set."
-            exit 1
-          elif [[ "${{ secrets.DOCKERHUB_USERNAME }}" == "***" ]]; then
-            echo "Error: DOCKERHUB_USERNAME secret appears to be a placeholder '***'. Please set it correctly."
-            exit 1
-          fi
-          echo "DOCKERHUB_USERNAME check passed for manifest job."
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Extract metadata for manifest
-        id: meta_manifest
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ secrets.DOCKERHUB_USERNAME }}/ddns-dnspod
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable={{is_default_branch}}
-
-      - name: Create and push manifest list
-        run: |
-          set -e # Exit immediately if a command exits with a non-zero status.
-          TAGS_TO_MANIFEST=""
-          echo "${{ steps.meta_manifest.outputs.tags }}" | while IFS= read -r tag_base; do
-            if [ -z "$tag_base" ]; then
-              echo "Skipping empty base tag."
-              continue
-            fi
-            echo "Processing base tag: $tag_base"
-            
-            # Define platform-specific tags based on the main tag_base
-            # Ensure these match the tags pushed by the build-binaries-and-docker-image job
-            # The build job pushes tags like: repo:version-os-arch and repo:latest-os-arch
-            # The manifest should use the same base tag (e.g., repo:version or repo:latest)
-            # and append the platform specific image names.
-
-            # Construct platform image names. This assumes your build job tagged them as $tag_base-linux-amd64 etc.
-            # The build job currently tags as:
-            # ${{ secrets.DOCKERHUB_USERNAME }}/ddns-dnspod:${{ steps.meta.outputs.version }}-${{ matrix.goos }}-${{ matrix.goarch }}
-            # ${{ secrets.DOCKERHUB_USERNAME }}/ddns-dnspod:latest-${{ matrix.goos }}-${{ matrix.goarch }}
-            # So, if tag_base is "myuser/ddns-dnspod:v1.0.0", the platform images are
-            # "myuser/ddns-dnspod:v1.0.0-linux-amd64", etc.
-
-            PLATFORM_IMG_AMD64="${tag_base}-linux-amd64"
-            PLATFORM_IMG_ARM64="${tag_base}-linux-arm64"
-
-            echo "Creating manifest for $tag_base using:"
-            echo "  $PLATFORM_IMG_AMD64"
-            echo "  $PLATFORM_IMG_ARM64"
-
-            docker manifest create --amend "$tag_base" \
-              "$PLATFORM_IMG_AMD64" \
-              "$PLATFORM_IMG_ARM64"
-            # Add annotations if necessary, e.g., for ARM variants
-            # docker manifest annotate "$tag_base" "$PLATFORM_IMG_ARM_V7" --os linux --arch arm --variant v7
-            
-            docker manifest push "$tag_base"
-            TAGS_TO_MANIFEST="$TAGS_TO_MANIFEST $tag_base"
-          done
-          if [ -n "$TAGS_TO_MANIFEST" ]; then
-            echo "Manifests created and pushed for tags:$TAGS_TO_MANIFEST"
-          else
-            echo "No tags processed for manifest creation."
-          fi
