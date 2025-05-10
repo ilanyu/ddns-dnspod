@@ -24,9 +24,9 @@ ENV DNSPOD_SECRET_ID=""
 ENV DNSPOD_SECRET_KEY=""
 ENV DNSPOD_DOMAIN=""
 ENV DNSPOD_RECORDID_IPV4=""
-ENV DNSPOD_SUBDOMAIN_IPV4="@" # Default subdomain to "@" if not provided
+ENV DNSPOD_SUBDOMAIN_IPV4="@"
 ENV DNSPOD_RECORDID_IPV6=""
-ENV DNSPOD_SUBDOMAIN_IPV6="@" # Default subdomain to "@" if not provided
+ENV DNSPOD_SUBDOMAIN_IPV6="@"
 
 # Application will look for config.toml in the same directory as the executable,
 # or rely on environment variables.
