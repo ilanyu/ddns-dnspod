@@ -15,6 +15,19 @@ COPY dist/${TARGETOS}-${TARGETARCH}/ddns-dnspod /app/ddns-dnspod
 # Ensure the binary is executable
 RUN chmod +x /app/ddns-dnspod
 
+# Declare expected environment variables.
+# For sensitive variables like secrets, do NOT provide actual default values here.
+# These ENV lines primarily serve as documentation within the Dockerfile and
+# can set non-sensitive defaults if applicable.
+# Users will need to provide these at runtime via `docker run -e VAR=value ...`
+ENV DNSPOD_SECRET_ID=""
+ENV DNSPOD_SECRET_KEY=""
+ENV DNSPOD_DOMAIN=""
+ENV DNSPOD_RECORDID_IPV4=""
+ENV DNSPOD_SUBDOMAIN_IPV4="@" # Default subdomain to "@" if not provided
+ENV DNSPOD_RECORDID_IPV6=""
+ENV DNSPOD_SUBDOMAIN_IPV6="@" # Default subdomain to "@" if not provided
+
 # Application will look for config.toml in the same directory as the executable,
 # or rely on environment variables.
 # It's recommended to mount config.toml or use environment variables for configuration.

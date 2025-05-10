@@ -118,6 +118,51 @@ ddns-dnspod.exe
 
 **注意:** 服务管理命令通常需要管理员/root权限。服务的具体名称是 `DDNSDNSPODService`。
 
+### 通过 Docker 运行
+
+您也可以通过 Docker 运行此应用程序。推荐使用环境变量来配置 Docker 容器。
+
+**拉取镜像:**
+```bash
+docker pull ilanyu/ddns-dnspod:latest 
+```
+
+**运行容器:**
+
+确保替换以下示例中的占位符为您自己的值。
+
+```bash
+docker run -d --name my-ddns-dnspod \
+  -e DNSPOD_SECRET_ID="YOUR_SECRET_ID" \
+  -e DNSPOD_SECRET_KEY="YOUR_SECRET_KEY" \
+  -e DNSPOD_DOMAIN="example.com" \
+  -e DNSPOD_RECORDID_IPV4="123456789" \
+  -e DNSPOD_SUBDOMAIN_IPV4="ddns" \
+  -e DNSPOD_RECORDID_IPV6="987654321" \
+  -e DNSPOD_SUBDOMAIN_IPV6="ddns" \
+  --restart always \
+  ilanyu/ddns-dnspod:latest
+```
+
+**必需的环境变量 (在 Docker 中运行时):**
+
+*   `DNSPOD_SECRET_ID`: 您的腾讯云账户 SecretId。
+*   `DNSPOD_SECRET_KEY`: 您的腾讯云账户 SecretKey。
+*   `DNSPOD_DOMAIN`: 您在 DNSPod 上托管的主域名。
+*   `DNSPOD_RECORDID_IPV4`: IPv4 (A 记录) 的 Record ID。如果不需要更新 IPv4，可以省略或留空，但至少需要一个 IPv4 或 IPv6 的 RecordID。
+*   `DNSPOD_SUBDOMAIN_IPV4`: (可选) A 记录的子域名。如果省略，默认为 `@` (主域名)。
+*   `DNSPOD_RECORDID_IPV6`: IPv6 (AAAA 记录) 的 Record ID。如果不需要更新 IPv6，可以省略或留空。
+*   `DNSPOD_SUBDOMAIN_IPV6`: (可选) AAAA 记录的子域名。如果省略，默认为 `@` (主域名)。
+
+**注意:**
+*   至少需要配置 `DNSPOD_RECORDID_IPV4` 或 `DNSPOD_RECORDID_IPV6` 中的一个，以便程序执行有效的 DDNS 更新。
+*   如果同时使用挂载的 `config.toml` 文件和环境变量，环境变量将覆盖配置文件中的相应值。
+
+**查看日志:**
+```bash
+docker logs my-ddns-dnspod
+```
+
 ## 日志
 
 程序运行日志会记录在可执行文件目录下的 `ddns-server.log` 文件中。日志文件会自动轮转，最大大小为 10MB，最多保留 3 个备份，最长保留 7 天。
